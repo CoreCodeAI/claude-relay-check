@@ -12,7 +12,7 @@ python3 check-relay.py --base-url https://中转地址 --key sk-你的密钥 --m
 ```text
 https://中转地址/v1/messages  model=claude-sonnet-5-5
 [PASS] shape     Messages 格式正确，返回模型 claude-sonnet-5-5，输入 143 token
-[PASS] cache     首次写入 17755 token，第 2 次读取 17755 token
+[PASS] cache     首次写入 18473 token，第 2 次读取 18473 token
 [PASS] signature 篡改签名被拒（HTTP 400），原样回传通过
 结论：三项都像 Anthropic 官方
 ```

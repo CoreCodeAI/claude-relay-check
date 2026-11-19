@@ -94,10 +94,11 @@ def check_shape(relay, model):
 
 def long_prefix():
     # About 18,000 tokens on Claude 5: above every Claude model's minimum cacheable length.
-    # The nonce makes this run's prefix new, so the first call has to write it.
+    # The nonce makes this run's prefix new, so the first call has to write it. Each line
+    # carries its own random value: on 2026-11-19, Sonnet 5.5 returned a 400 for a system
+    # prompt of ten or more near-identical lines.
     nonce = secrets.token_hex(8)
-    lines = [f"Reference line {i:04d} of run {nonce}: the relay check repeats this text to fill a cacheable prefix."
-             for i in range(400)]
+    lines = [f"Reference line {i:04d} of run {nonce}: {secrets.token_hex(16)}" for i in range(400)]
     return "You are a terse assistant. Answer in one word.\n" + "\n".join(lines)
 
 
