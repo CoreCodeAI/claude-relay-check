@@ -5,8 +5,10 @@ import hmac
 import importlib.util
 import io
 import json
+import re
 import threading
 import unittest
+from collections import Counter
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -40,6 +42,9 @@ class Upstream:
                     return 400, {"type": "error", "error": {"type": "invalid_request_error", "message": "Invalid signature in thinking block"}}
         usage = {"input_tokens": 12, "output_tokens": 3}
         system = body.get("system")
+        if system and repeats_lines(system[0]["text"]):
+            # Sonnet 5.5 on corecode.live, 2026-11-19: ten or more near-identical system lines got a 400.
+            return 400, {"type": "error", "error": {"type": "invalid_request_error", "message": "Error"}}
         if system and self.cache:
             prefix = system[0]["text"]
             tokens = len(prefix) // 4
@@ -55,6 +60,12 @@ class Upstream:
                        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}}]
         return 200, {"id": "msg_01abc", "type": "message", "role": "assistant", "model": body["model"],
                      "content": content, "usage": usage}
+
+
+def repeats_lines(text):
+    """Ten or more lines that differ only in a number."""
+    counts = Counter(re.sub(r"\d+", "#", line) for line in text.splitlines())
+    return max(counts.values()) >= 10
 
 
 def serve(upstream):

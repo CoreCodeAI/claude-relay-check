@@ -5,12 +5,13 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # setup-python has no 3.8 build for the current ubuntu-latest; the official
+    # image keeps the oldest version the script supports testable.
+    container: python:${{ matrix.python }}-slim
     strategy:
+      fail-fast: false
       matrix:
         python: ["3.8", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
       - run: python3 test_check_relay.py
