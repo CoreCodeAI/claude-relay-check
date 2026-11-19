@@ -94,12 +94,31 @@ def check_shape(relay, model):
 
 def long_prefix():
     # About 18,000 tokens on Claude 5: above every Claude model's minimum cacheable length.
-    # The nonce makes this run's prefix new, so the first call has to write it. Each line
-    # carries its own random value: on 2026-11-19, Sonnet 5.5 returned a 400 for a system
-    # prompt of ten or more near-identical lines.
-    nonce = secrets.token_hex(8)
-    lines = [f"Reference line {i:04d} of run {nonce}: {secrets.token_hex(16)}" for i in range(400)]
-    return "You are a terse assistant. Answer in one word.\n" + "\n".join(lines)
+    # The nonce and the random sums make this run's prefix new, so the first call has to
+    # write it. Sums, not filler: in November 2026, Anthropic refused meaningless system text
+    # with a 400 on some models (numbered hex lines on Sonnet 5.5 in 3 to 7 calls of 10,
+    # random words on Haiku 5.5 in 8 of 10), and refused these sums on none of 120 calls across four models.
+    lines = []
+    for _ in range(1200):
+        a, b = secrets.randbelow(9000) + 1000, secrets.randbelow(900) + 100
+        lines.append(f"{a} plus {b} equals {a + b}.")
+    return f"You are a terse assistant. Answer in one word. Run {secrets.token_hex(8)}.\n" + "\n".join(lines)
+
+
+# A refusal of the key or the route will not change on a second try.
+FINAL = {401, 403, 404}
+
+
+def post_retrying(relay, body, tries=3):
+    """(status, data, raw, failed calls). Repeats a call the upstream refused for some
+    other reason: in November 2026, Anthropic sometimes answered a cache call with a 400
+    that the same request on another account did not get. Retrying cannot fake a cache
+    write or read, so it costs a few calls and never a verdict."""
+    for failed in range(tries):
+        status, data, raw = relay.post(body)
+        if (status == 200 and isinstance(data, dict)) or status in FINAL or failed == tries - 1:
+            return status, data, raw, failed
+        time.sleep(3)
 
 
 def check_cache(relay, model):
@@ -107,8 +126,10 @@ def check_cache(relay, model):
             "system": [{"type": "text", "text": long_prefix(), "cache_control": {"type": "ephemeral"}}],
             "messages": [{"role": "user", "content": "Reply with: ok"}]}
     usages = []
+    retried = 0
     for attempt in range(3):
-        status, data, raw = relay.post(body)
+        status, data, raw, failed = post_retrying(relay, body)
+        retried += failed
         if status != 200 or not isinstance(data, dict):
             return ERROR, t(f"请求失败：HTTP {status} {error_text(data, raw)}", f"request failed: HTTP {status} {error_text(data, raw)}")
         usages.append(data.get("usage") or {})
@@ -126,7 +147,8 @@ def check_cache(relay, model):
                        f"wrote {written} cached tokens but read none in {len(usages) - 1} retries: requests may land on different accounts, so the cache keeps missing")
     if written and abs(read - written) > written * 0.05:
         return WARN, t(f"写入 {written}、读取 {read} token，两者对不上", f"wrote {written} but read {read} cached tokens; they should match")
-    return PASS, t(f"首次写入 {written} token，第 {len(usages)} 次读取 {read} token", f"wrote {written} tokens, read {read} on call {len(usages)}")
+    note = t(f"（{retried} 次请求失败后重试成功）", f" (after {retried} failed call(s) were retried)") if retried else ""
+    return PASS, t(f"首次写入 {written} token，第 {len(usages)} 次读取 {read} token", f"wrote {written} tokens, read {read} on call {len(usages)}") + note
 
 
 TOOL = {"name": "get_weather", "description": "Current weather for a city.",

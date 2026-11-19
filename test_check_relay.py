@@ -8,7 +8,6 @@ import json
 import re
 import threading
 import unittest
-from collections import Counter
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,9 +26,12 @@ class Upstream:
     verify_signatures = True
     cache = True
     same_account = True
+    refuse_cache_calls = 0
+    refuse_status = 400
 
     def __init__(self):
         self.cached = set()
+        self.cache_calls = 0
 
     def sign(self, text):
         return hmac.new(self.secret, text.encode(), hashlib.sha256).hexdigest() * 2
@@ -42,8 +44,13 @@ class Upstream:
                     return 400, {"type": "error", "error": {"type": "invalid_request_error", "message": "Invalid signature in thinking block"}}
         usage = {"input_tokens": 12, "output_tokens": 3}
         system = body.get("system")
-        if system and repeats_lines(system[0]["text"]):
-            # Sonnet 5.5 on corecode.live, 2026-11-19: ten or more near-identical system lines got a 400.
+        if system:
+            self.cache_calls += 1
+            if self.cache_calls <= self.refuse_cache_calls:
+                # Sonnet 5.5, November 2026: a cache call now and then gets a bare 400.
+                return self.refuse_status, {"type": "error", "error": {"message": "Error"}}
+        if system and coded_lines(system[0]["text"]):
+            # Sonnet 5.5, November 2026: system lines of hex codes got a 400 on 3 to 7 calls in 10.
             return 400, {"type": "error", "error": {"type": "invalid_request_error", "message": "Error"}}
         if system and self.cache:
             prefix = system[0]["text"]
@@ -62,10 +69,9 @@ class Upstream:
                      "content": content, "usage": usage}
 
 
-def repeats_lines(text):
-    """Ten or more lines that differ only in a number."""
-    counts = Counter(re.sub(r"\d+", "#", line) for line in text.splitlines())
-    return max(counts.values()) >= 10
+def coded_lines(text):
+    """Ten or more lines carrying a run of 16 or more hex digits."""
+    return sum(bool(re.search(r"[0-9a-f]{16,}", line)) for line in text.splitlines()) >= 10
 
 
 def serve(upstream):
@@ -128,6 +134,29 @@ class CheckRelayTest(unittest.TestCase):
         code, lines = self.run_against(upstream)
         self.assertEqual(lines["cache"], "[WARN]")
         self.assertEqual(code, 0)
+
+    def test_cache_retries_a_refused_call(self):
+        upstream = Upstream()
+        upstream.refuse_cache_calls = 2
+        code, lines = self.run_against(upstream)
+        self.assertEqual(lines["cache"], "[PASS]")
+        self.assertEqual(code, 0)
+
+    def test_cache_gives_up_after_three_refusals(self):
+        upstream = Upstream()
+        upstream.refuse_cache_calls = 99
+        code, lines = self.run_against(upstream)
+        self.assertEqual(lines["cache"], "[ERROR]")
+        self.assertEqual(upstream.cache_calls, 3)
+        self.assertEqual(code, 2)
+
+    def test_cache_does_not_retry_a_refused_key(self):
+        upstream = Upstream()
+        upstream.refuse_cache_calls = 99
+        upstream.refuse_status = 403
+        code, lines = self.run_against(upstream)
+        self.assertEqual(lines["cache"], "[ERROR]")
+        self.assertEqual(upstream.cache_calls, 1)
 
     def test_non_anthropic_shape_fails(self):
         upstream = Upstream()
